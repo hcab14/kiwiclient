@@ -52,11 +52,11 @@ def dft_complex(input):
     output = []
     w1d = complex(0, -2 * math.pi / width)
     w1 = 0
-    for k in xrange(width):
+    for k in range(width):
         X = 0
         w2d = cmath.exp(w1)
         w2 = complex(1, 0)
-        for n in xrange(width):
+        for n in range(width):
             X += input[n] * w2
             w2 *= w2d
         output.append(X)
@@ -69,11 +69,11 @@ def idft_complex(input):
     output = []
     w1d = complex(0, 2 * math.pi / width)
     w1 = 0
-    for n in xrange(width):
+    for n in range(width):
         X = 0
         w2d = cmath.exp(w1)
         w2 = complex(1, 0)
-        for k in xrange(width):
+        for k in range(width):
             X += input[k] * w2
             w2 *= w2d
         output.append(X * width_inv)
@@ -85,7 +85,7 @@ def bitreverse_sort(input):
 
     half_length = len(input) // 2
     j = half_length
-    for i in xrange(1, len(input) - 1):
+    for i in range(1, len(input) - 1):
         if i < j:
             t = output[j]
             output[j] = output[i]
@@ -104,14 +104,14 @@ def log2(x):
 def fft_core(x):
     length = len(x)
 
-    for l in xrange(1, log2(length) + 1):
+    for l in range(1, log2(length) + 1):
         le = 1 << l
         le2 = le >> 1
         w = 2 * math.pi / le
         s = cmath.exp(complex(0, -w))
         u = complex(1, 0)
-        for j in xrange(1, le2 + 1):
-            for i in xrange(j - 1, length, le):
+        for j in range(1, le2 + 1):
+            for i in range(j - 1, length, le):
                 o = i + le2
                 t = x[o] * u
                 x[o] = x[i] - t
@@ -143,14 +143,14 @@ def peak_detect(data, thresh):
     while True:
         peak_index = 0
         peak_value = data[peak_index]
-        for i in xrange(1, len(data)):
+        for i in range(1, len(data)):
             if peak_value < data[i]:
                 peak_value = data[i]
                 peak_index = i
         if peak_value < thresh:
             break
         peaks.append((peak_index, peak_value))
-        for i in xrange(max(peak_index - peak_radius, 0), min(peak_index + peak_radius + 1, len(data))):
+        for i in range(max(peak_index - peak_radius, 0), min(peak_index + peak_radius + 1, len(data))):
             data[i] = -999
     return peaks
 
@@ -188,9 +188,9 @@ class IQConverterFFT:
         X = fft_complex([ complex(x) for x in samples ])
         w = 1 + len(X) // 2
         Y = []
-        for i in xrange(0, w):
+        for i in range(0, w):
             Y.append(X[i])
-        for i in xrange(w, len(X)):
+        for i in range(w, len(X)):
             Y.append(complex(1e-6))
         return ifft_complex(Y)
 
@@ -214,7 +214,7 @@ class Interpolator:
             self._buffer.append(float(x))
     def __iter__(self):
         return self
-    def next(self):
+    def __next__(self):
         t_int = math.trunc(self._t)
         t_frac = self._t - t_int
         if t_int + 3 >= len(self._buffer):
@@ -239,7 +239,7 @@ class FIRFilter:
         i = 0
         while i + len(self._kernel) < len(self._buffer):
             y = 0
-            for j in xrange(len(self._kernel)):
+            for j in range(len(self._kernel)):
                 y += self._buffer[i+j] * self._kernel[-j-1]
             Y.append(y)
             i += 1
@@ -252,7 +252,7 @@ def generate_sinc(fc, length):
     h = []
     w = 2 * math.pi * fc
     zf = (length - 1) / 2
-    for i in xrange(0, length):
+    for i in range(0, length):
         x = i - zf
         if x == 0:
             h.append(w)
@@ -262,7 +262,7 @@ def generate_sinc(fc, length):
 
 def generate_cosine_window_3(length, a, b, c, d):
     w = (2 * math.pi) / (length - 1)
-    return [(a - b * math.cos(w * i) + c * math.cos(2 * w * i) -d * math.cos(3 * w * i)) for i in xrange(0, length)]
+    return [(a - b * math.cos(w * i) + c * math.cos(2 * w * i) -d * math.cos(3 * w * i)) for i in range(0, length)]
 
 def generate_blackman_nuttall_window(length):
     return generate_cosine_window_3(length, 0.3635819, 0.4891775, 0.1365995, 0.0106411)
@@ -270,7 +270,7 @@ def generate_blackman_nuttall_window(length):
 def apply_window(h, hw):
     if len(h) != len(hw):
         raise ValueError("vectors must have equal lengths")
-    return [ h[i] * hw[i] for i in xrange(len(hw)) ]
+    return [ h[i] * hw[i] for i in range(len(hw)) ]
 
 
 def mapper_df_to_intensity(dfs, black_thresh, white_thresh):
@@ -281,14 +281,14 @@ class Histogram:
     def __init__(self, bins, xmin, xmax):
         self._min = xmin
         self._max = xmax
-        self._bins = [ 0 for i in xrange(bins) ]
+        self._bins = [ 0 for i in range(bins) ]
     def put(self, x):
         x = clamp(x, self._min, self._max)
         x = (x - self._min) / (self._max - self._min)
         i = int(x * (len(self._bins) - 1))
         self._bins[i] += 1
     def clear(self):
-        for i in xrange(len(self._bins)):
+        for i in range(len(self._bins)):
             self._bins[i] = 0
     def get(self):
         s = 1.0 / sum(self._bins)
@@ -309,7 +309,9 @@ class KiwiFax(KiwiSDRStream):
         self._options = options
         self._reader = True
         self._options.idx = 0
+        self._options.stats = True
         self._type = 'SND'
+        self._start_time = time.time()
 
         self._ioc = options.ioc
         self._lpm = options.lpm
@@ -441,7 +443,7 @@ class KiwiFax(KiwiSDRStream):
         # Window size defines the overall size of the window
         # Window shift defines how many samples are discarded after each iteration
         # This allows for overlapping FFTs thus increasing temporal resolution
-        window_shift = self._ss_window_size / 2
+        window_shift = self._ss_window_size // 2
         while len(self._startstop_buffer) >= self._ss_window_size:
             window = self._startstop_buffer[:self._ss_window_size]
             self._startstop_buffer = self._startstop_buffer[window_shift:]
@@ -573,7 +575,7 @@ class KiwiFax(KiwiSDRStream):
         i = 0
         while i + phasing_pulse_size < len(self._pixel_buffer):
             s = 0
-            for j in xrange(i, i + phasing_pulse_size):
+            for j in range(i, i + phasing_pulse_size):
                 s += clamp(self._pixel_buffer[j], 0, 1)
             s /= phasing_pulse_size
             if s >= 0.85:
@@ -646,7 +648,7 @@ KNOWN_CORRECTION_FACTORS = {
 }
 
 def main():
-    sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
+    #sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
 
     parser = OptionParser()
     parser.add_option('-k', '--socket-timeout', '--socket_timeout',
@@ -728,10 +730,14 @@ def main():
                       help='Print "ADC OV" message when Kiwi ADC is overloaded')
 
     (options, unused_args) = parser.parse_args()
-    options.timestamp = int(time.time() + os.getpid()) & 0xffffffff
+    options.ws_timestamp = int(time.time() + os.getpid()) & 0xffffffff
     options.raw = False
+    options.nolocal = False
     options.S_meter = -1
     options.rigctl_enabled = False
+    options.freq_pbc = None
+    options.wf_cal = None
+    options.wideband = False
 
     # Setup logging
     fmtr = logging.Formatter('%(asctime)s %(levelname)s: %(message)s', '%Y%m%dT%H%MZ')

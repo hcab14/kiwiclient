@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+
+.coverage
+.cache/
+.eggs/
+*.egg-info
+dist/
+build/
+
+docs/_build
+
+tags
+.vscode/
+
+samplerate/_src.py

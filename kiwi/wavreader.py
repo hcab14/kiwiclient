@@ -1,6 +1,9 @@
 # -*- python -*-
 
-import collections
+try:
+    import collections.abc as collectionsAbc # python 3.6+
+except ImportError:
+    import collections as collectionsAbc
 import struct
 import numpy as np
 from chunk import Chunk
@@ -8,7 +11,7 @@ from chunk import Chunk
 class KiwiIQWavError(Exception):
     pass
 
-class KiwiIQWavReader(collections.Iterator):
+class KiwiIQWavReader(collectionsAbc.Iterator):
     def __init__(self, f):
         super(KiwiIQWavReader, self).__init__()
         self._frame_counter = 0

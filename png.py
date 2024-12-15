@@ -207,11 +207,12 @@ class Writer:
         """
         # http://www.w3.org/TR/PNG/#5Chunk-layout
         outfile.write(struct.pack("!I", len(data)))
+        tag = bytes(tag, 'utf-8');
         outfile.write(tag)
         outfile.write(data)
         checksum = zlib.crc32(tag)
         checksum = zlib.crc32(data, checksum)
-        outfile.write(struct.pack("!i", checksum))
+        outfile.write(struct.pack("!I", checksum))
 
     def write(self, outfile, scanlines):
         """
@@ -264,13 +265,13 @@ class Writer:
             data.append(0)
             data.extend(scanline)
             if len(data) > self.chunk_limit:
-                compressed = compressor.compress(data.tostring())
+                compressed = compressor.compress(data.tobytes())
                 if len(compressed):
                     # print >> sys.stderr, len(data), len(compressed)
                     self.write_chunk(outfile, 'IDAT', compressed)
                 data = array('B')
         if len(data):
-            compressed = compressor.compress(data.tostring())
+            compressed = compressor.compress(data.tobytes())
         else:
             compressed = ''
         flushed = compressor.flush()
@@ -279,7 +280,7 @@ class Writer:
             self.write_chunk(outfile, 'IDAT', compressed + flushed)
 
         # http://www.w3.org/TR/PNG/#11IEND
-        self.write_chunk(outfile, 'IEND', '')
+        self.write_chunk(outfile, 'IEND', bytes('', 'utf-8'))
 
     def write_array(self, outfile, pixels):
         """
@@ -408,7 +409,7 @@ class _readable:
     def read(self, n):
         r = buf[offset:offset+n]
         if isinstance(r, array):
-            r = r.tostring()
+            r = r.tobytes()
         offset += n
         return r
 
@@ -702,7 +703,7 @@ class Reader:
         while True:
             try:
                 tag, data = self.read_chunk()
-            except ValueError, e:
+            except ValueError as e:
                 raise Error('Chunk error: ' + e.args[0])
 
             # print >> sys.stderr, tag, len(data)

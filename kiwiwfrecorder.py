@@ -55,8 +55,7 @@ class KiwiWaterfallRecorder(KiwiSDRStream):
         self._num_skip = 2 ## skip data at the start of the WS stream with seq < 2
 
     def _setup_rx_params(self):
-        counter,self._freq = self.start_frequency_to_counter(self._freq)
-        self._set_zoom_start(self._zoom, counter)
+        self._set_zoom_cf(self._zoom, self._freq)
         self._set_maxdb_mindb(-10, -110)    # needed, but values don't matter
         self._freq_bins = self._freq + (0.5+np.arange(self.WF_BINS))/self.WF_BINS * self.zoom_to_span(self._options.zoom)
         #self._set_wf_comp(True)
@@ -152,7 +151,7 @@ class Consumer(threading.Thread):
 
 def join_threads(threads):
     [t._event.set() for t in threads]
-    [t.join()       for t in threading.enumerate() if t is not threading.currentThread()]
+    [t.join()       for t in threading.enumerate() if t is not threading.current_thread()]
 
 def main():
     parser = OptionParser()
@@ -165,6 +164,25 @@ def main():
     parser.add_option('--pw', '--password',
                       dest='password', type='string', default='',
                       help='Kiwi login password')
+    parser.add_option('--connect-timeout', '--connect_timeout',
+                      dest='connect_timeout',
+                      type='int', default=15,
+                      help='Retry timeout(sec) connecting to host')
+    parser.add_option('--connect-retries', '--connect_retries',
+                      dest='connect_retries',
+                      type='int', default=0,
+                      help='Number of retries when connecting to host (retries forever by default)')
+    parser.add_option('--busy-timeout', '--busy_timeout',
+                      dest='busy_timeout',
+                      type='int', default=15,
+                      help='Retry timeout(sec) when host is busy')
+    parser.add_option('--busy-retries', '--busy_retries',
+                      dest='busy_retries',
+                      type='int', default=0,
+                      help='Number of retries when host is busy (retries forever by default)')
+    parser.add_option('-k', '--socket-timeout', '--socket_timeout',
+                      dest='socket_timeout', type='int', default=10,
+                      help='Timeout(sec) for sockets')
     parser.add_option('--tlimit-pw', '--tlimit-password',
                       dest='tlimit_password', type='string', default='',
                       help='Connect time limit exemption password (if required)')
@@ -193,14 +211,15 @@ def main():
 
     opt.rigctl_enabled = False
     opt.is_kiwi_tdoa = False
-    opt.connect_retries = 3
-    opt.connect_timeout = 3
-    opt.socket_timeout = 10
     opt.tlimit = None
     opt.no_api = True
+    opt.nolocal = False
     opt.raw = False
     opt.S_meter = -1
     opt.ADC_OV = None
+    opt.freq_pbc = None
+    opt.wf_cal = None
+    opt.wideband = False
 
     FORMAT = '%(asctime)-15s pid %(process)5d %(message)s'
     logging.basicConfig(level=logging.getLevelName(opt.log_level.upper()), format=FORMAT)
@@ -219,13 +238,13 @@ def main():
 
     try:
         opt.start_time = time.time()
-        opt.timestamp = int(time.time() + os.getpid()) & 0xffffffff
+        opt.ws_timestamp = int(time.time() + os.getpid()) & 0xffffffff
         opt.idx = 0
         snd_recorder.start()
 
         opt.start_time = time.time()
-        opt.timestamp = int(time.time() + os.getpid()+1) & 0xffffffff
-        opt.idx = 1
+        opt.ws_timestamp = int(time.time() + os.getpid()+1) & 0xffffffff
+        opt.idx = 0
         wf_recorder.start()
 
         consumer.start()

@@ -108,8 +108,19 @@ class Rigctld(object):
     def _set_frequency(self, command):
         try:
             # hamlib freq is in Hz, kiwisdr in kHz
+            # format: F 1234.00000
             newfreq = command[2:]
             freq = float(newfreq) / 1000
+        except:
+            try:
+                # format: F VFOA 1234.00000
+                newfreq = command[7:]
+                freq = float(newfreq) / 1000
+            except:
+                print("could not decode frequency from {command}")
+                return "RPRT -1\n"
+
+        try:
             mod = self._kiwisdrstream.get_mod()
             lc = self._kiwisdrstream.get_lowcut()
             hc = self._kiwisdrstream.get_highcut()
@@ -168,6 +179,10 @@ class Rigctld(object):
         return message
 
     def _handle_command(self, sock, command):
+        # Remove leading '\' from command
+        if command.startswith("\\"):
+            command = command[1:]
+
         if command.startswith('q'):
             # quit
             try:
@@ -177,9 +192,15 @@ class Rigctld(object):
             except:
                 pass
             return "RPRT 0\n"
-        elif command.startswith('\chk_vfo'):
-            return "0\n"
-        elif command.startswith('\dump_state'):
+        elif command.startswith('chk_vfo'):
+            return "CHKVFO 0\n"
+        elif command.startswith('get_lock_mode'):
+            # unlocked
+            return "2\n"
+        elif command.startswith('get_powerstat'):
+            # always report that power is on
+            return "1\n"
+        elif command.startswith('dump_state'):
             return self._dump_state()
         elif command.startswith('f'):
             # get frequency
@@ -199,6 +220,9 @@ class Rigctld(object):
             return "0\nVFOA\n"
         elif command.startswith('v'):
             return "VFOA\n"
+        elif command.startswith('V'):
+            # We cannot switch the VFO on a single kiwisdr channel
+            return "RPRT 0\n"
             
         print("Received unknown command: ", command)
         return "RPRT 0\n"
@@ -214,7 +238,7 @@ class Rigctld(object):
 
         # check for incoming traffic on existing connections
         read_list = self._clientsockets
-        readable, writable, errored = select.select(read_list, [], [], 0)
+        readable, writable, errored = select.select(read_list, [], [], 0) if len(read_list) > 0 else ([],[],[])
 
         for s in errored:
             s.close()

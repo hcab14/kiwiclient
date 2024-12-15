@@ -4,7 +4,7 @@ import logging
 import threading
 from traceback import print_exc
 
-from .client import KiwiTooBusyError, KiwiTimeLimitError, KiwiServerTerminatedConnection
+from .client import KiwiTooBusyError, KiwiRedirectError, KiwiTimeLimitError, KiwiServerTerminatedConnection
 from .rigctld import Rigctld
 
 class KiwiWorker(threading.Thread):
@@ -22,12 +22,13 @@ class KiwiWorker(threading.Thread):
 
     def run(self):
         self.connect_count = self._options.connect_retries
+        self.busy_count = self._options.busy_retries
         
         while self._do_run():
             try:
                 self._recorder.connect(self._options.server_host, self._options.server_port)
             except Exception as e:
-                logging.info("Failed to connect, sleeping and reconnecting error='%s'" %e)
+                logging.warn("Failed to connect, sleeping and reconnecting error='%s'" %e)
                 if self._options.is_kiwi_tdoa:
                     self._options.status = 1
                     break
@@ -58,12 +59,29 @@ class KiwiWorker(threading.Thread):
                 self._event.wait(timeout=5)
                 continue
             except KiwiTooBusyError:
-                logging.info("%s:%d too busy now. Reconnecting after 15 seconds"
-                      % (self._options.server_host, self._options.server_port))
                 if self._options.is_kiwi_tdoa:
                     self._options.status = 2
                     break
-                self._event.wait(timeout=15)
+                self.busy_count -= 1
+                if self._options.busy_retries > 0 and self.busy_count == 0:
+                    break
+                logging.warn("%s:%d Too busy now. Reconnecting after %d seconds"
+                      % (self._options.server_host, self._options.server_port, self._options.busy_timeout))
+                if self._options.busy_timeout > 0:
+                    self._event.wait(timeout = self._options.busy_timeout)
+                continue
+            except KiwiRedirectError as e:
+                prev = self._options.server_host +':'+ str(self._options.server_port)
+                # http://host:port
+                #        ^^^^ ^^^^
+                uri = str(e).split(':')
+                self._options.server_host = uri[1][2:]
+                self._options.server_port = uri[2]
+                logging.warn("%s Too busy now. Redirecting to %s:%s" % (prev, self._options.server_host, self._options.server_port))
+                if self._options.is_kiwi_tdoa:
+                    self._options.status = 2
+                    break
+                self._event.wait(timeout=2)
                 continue
             except KiwiTimeLimitError:
                 break
@@ -75,5 +93,6 @@ class KiwiWorker(threading.Thread):
 
         self._run_event.clear()   # tell all other threads to stop
         self._recorder.close()
+        self._recorder._close_func()
         if self._rigctld:
             self._rigctld.close()

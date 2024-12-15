@@ -35,16 +35,17 @@ class KiwiSoundRecorder(KiwiSDRStream):
         self._options = options
         self._type = 'SND'
         freq = options.frequency
-        options.S_meter = False
+        options.S_meter = -1
+        options.stats = False
         #logging.info("%s:%s freq=%d" % (options.server_host, options.server_port, freq))
         self._freq = freq
+        self._ifreq = options.ifreq
         self._modulation = self._options.modulation
         self._lowcut = self._options.lp_cut
         self._highcut = self._options.hp_cut
         self._start_ts = None
         self._start_time = None
         self._squelch = Squelch(self._options) if options.thresh is not None else None
-        self._num_channels = 2 if options.modulation == 'iq' else 1
         self._last_gps = dict(zip(['last_gps_solution', 'dummy', 'gpssec', 'gpsnsec'], [0,0,0,0]))
         self._resampler = None
         self._output_sample_rate = 0
@@ -95,6 +96,8 @@ class KiwiSoundRecorder(KiwiSDRStream):
             if thresh < 0 or thresh > 100:
                 thresh = 50
             self.set_noise_blanker(gate, thresh)
+        if self._options.de_emp is True:
+            self.set_de_emp(1)
         self._output_sample_rate = int(self._sample_rate)
         if self._options.resample > 0:
             self._output_sample_rate = self._options.resample
@@ -102,7 +105,13 @@ class KiwiSoundRecorder(KiwiSDRStream):
             logging.info('resampling from %g to %d Hz (ratio=%f)' % (self._sample_rate, self._options.resample, self._ratio))
             if not HAS_RESAMPLER:
                 logging.info("libsamplerate not available: linear interpolation is used for low-quality resampling. "
-                             "(pip install samplerate)")
+                             "(pip/pip3 install samplerate)")
+        if self._ifreq is not None:
+            if self._modulation != 'iq':
+                logging.warning('Option --if %.1f only valid for IQ modulation, ignored' % self._ifreq)
+            elif self._output_sample_rate < self._ifreq * 4:
+                logging.warning('Sample rate %.1f is not enough for --if %.1f, ignored. Use --resample %.1f' % (
+                    self._output_sample_rate, self._ifreq, self._ifreq * 4))
         self._init_player()
 
     def _process_audio_samples(self, seq, samples, rssi):
@@ -130,8 +139,110 @@ class KiwiSoundRecorder(KiwiSDRStream):
         fsamples /= 32768
         self._player.play(fsamples)
 
+    def _process_iq_samples_raw(self, seq, data):
+        if self._options.quiet is False:
+            sys.stdout.write('\rBlock: %08x' % seq)
+            sys.stdout.flush()
+
+        n = len(data)//4
+
+        if self._options.resample == 0 or HAS_RESAMPLER:
+            ## convert bytes into an array
+            s = np.ndarray((n,2), dtype='>h', buffer=data).astype(np.float32) / 32768
+
+        if self._options.resample > 0:
+            if HAS_RESAMPLER:
+                ## libsamplerate resampling
+                if self._resampler is None:
+                    self._resampler = Resampler(channels=2, converter_type='sinc_best')
+                s = self._resampler.process(s, ratio=self._ratio)
+            else:
+                ## resampling by linear interpolation
+                m  = int(round(n*self._ratio))
+                xa = np.arange(m)/self._ratio
+                xp = np.arange(n)
+                s  = np.ndarray((m,2), dtype=np.float32)
+                s[:, 0] = np.interp(xa, xp, data[0::2] / 32768)
+                s[:, 1] = np.interp(xa, xp, data[1::2] / 32768)
+
+        if self._ifreq is not None and self._output_sample_rate >= 4 * self._ifreq:
+            # view as complex after possible resampling - no copying.
+            cs = s.view(dtype=np.complex64)
+            l = len(cs)
+            # get final phase value
+            stopph = self.startph + 2 * np.pi * l * self._ifreq / self._output_sample_rate
+            # all the steps needed
+            steps = 1j*np.linspace(self.startph, stopph, l, endpoint=False, dtype=np.float32)
+            # shift frequency and get back to a 2D array
+            s = (cs * np.exp(steps)[:, None]).view(np.float32)
+            # save phase  for next time, modulo 2π
+            self.startph = stopph % (2*np.pi)
+
+        self._player.play(s)
+
+    # phase for frequency shift
+    startph = np.float32(0)
+
+    def _process_iq_samples(self, seq, samples, rssi, gps):
+        if self._options.quiet is False:
+            sys.stdout.write('\rBlock: %08x, RSSI: %6.1f' % (seq, rssi))
+            sys.stdout.flush()
+
+        if self._squelch:
+            is_open = self._squelch.process(seq, rssi)
+            if not is_open:
+                self._start_ts = None
+                self._start_time = None
+                return
+
+        ##print gps['gpsnsec']-self._last_gps['gpsnsec']
+        self._last_gps = gps
+
+        if self._options.resample == 0 or HAS_RESAMPLER:
+            ## convert list of complex numbers into an array
+            s = np.ndarray((len(samples),2), dtype=np.float32)
+            s[:, 0] = np.real(samples).astype(np.float32) / 32768
+            s[:, 1] = np.imag(samples).astype(np.float32) / 32768
+
+        if self._options.resample > 0:
+            if HAS_RESAMPLER:
+                ## libsamplerate resampling
+                if self._resampler is None:
+                    self._resampler = Resampler(channels=2, converter_type='sinc_best')
+                s = self._resampler.process(s, ratio=self._ratio)
+            else:
+                ## resampling by linear interpolation
+                n  = len(samples)
+                m  = int(round(n*self._ratio))
+                xa = np.arange(m)/self._ratio
+                xp = np.arange(n)
+                s  = np.ndarray((m,2), dtype=np.float32)
+                s[:, 0] = np.interp(xa, xp, np.real(samples).astype(np.float32) / 32768)
+                s[:, 1] = np.interp(xa, xp, np.imag(samples).astype(np.float32) / 32768)
+
+
+        if self._ifreq is not None and self._output_sample_rate >= 4 * self._ifreq:
+            # view as complex after possible resampling - no copying.
+            cs = s.view(dtype=np.complex64)
+            l = len(cs)
+            # get final phase value
+            stopph = self.startph + 2 * np.pi * l * self._ifreq / self._output_sample_rate
+            # all the steps needed
+            steps = 1j*np.linspace(self.startph, stopph, l, endpoint=False, dtype=np.float32)
+            # shift frequency and get back to a 2D array
+            s = (cs * np.exp(steps)[:, None]).view(np.float32)
+            # save phase  for next time, modulo 2π
+            self.startph = stopph % (2*np.pi)
+
+        self._player.play(s)
+
+        # no GPS or no recent GPS solution
+        last = gps['last_gps_solution']
+        if last == 255 or last == 254:
+            self._options.status = 3
+
     def _on_sample_rate_change(self):
-        if not self._options.resample:
+        if self._options.resample == 0:
             # if self._output_sample_rate == int(self._sample_rate):
             #    return
             # reinitialize player if the playback sample rate changed
@@ -152,7 +263,7 @@ def options_cross_product(options):
         opt_single.status = 0
 
         # time() returns seconds, so add pid and host index to make timestamp unique per connection
-        opt_single.timestamp = int(time.time() + os.getpid() + i) & 0xffffffff
+        opt_single.ws_timestamp = int(time.time() + os.getpid() + i) & 0xffffffff
         for x in ['server_host', 'server_port', 'password', 'tlimit_password', 'frequency', 'agc_gain', 'station', 'user', 'sounddevice', 'rigctl_port']:
             opt_single.__dict__[x] = _sel_entry(i, opt_single.__dict__[x])
         l.append(opt_single)
@@ -166,7 +277,7 @@ def get_comma_separated_args(option, opt, value, parser, fn):
 
 def join_threads(snd):
     [r._event.set() for r in snd]
-    [t.join() for t in threading.enumerate() if t is not threading.currentThread()]
+    [t.join() for t in threading.enumerate() if t is not threading.current_thread()]
 
 def main():
     # extend the OptionParser so that we can print multiple paragraphs in
@@ -197,7 +308,7 @@ def main():
                    " two KiwiSDR channels in USB to the virtual sound cards"
                    " kiwisdr0 & kiwisdr1, with the rigctl ports 6400 &"
                    " 6401 respectively, run the following:",
-                   "$ kiwiclientd.py -s kiwisdr.example.com -p 8073 -f 10000 -m usb --snddev kiwisnd0,kiwisnd1 --rigctl-port 6400,6401" ,""]
+                   "$ kiwiclientd.py -s kiwisdr.example.com -p 8073 -f 10000 -m usb --snddev kiwisnd0,kiwisnd1 --rigctl-port 6400,6401 --enable-rigctl" ,""]
     epilog = [] # text here would go after the options list
     parser = MyParser(usage=usage, description=description, epilog=epilog)
     parser.add_option('-s', '--server-host',
@@ -253,6 +364,14 @@ def main():
     parser.add_option('--connect-timeout', '--connect_timeout',
                       dest='connect_timeout', type='int', default=15,
                       help='Retry timeout(sec) connecting to host')
+    parser.add_option('--busy-timeout', '--busy_timeout',
+                      dest='busy_timeout',
+                      type='int', default=15,
+                      help='Retry timeout(sec) when host is busy')
+    parser.add_option('--busy-retries', '--busy_retries',
+                      dest='busy_retries',
+                      type='int', default=0,
+                      help='Number of retries when host is busy (retries forever by default)')
     parser.add_option('-k', '--socket-timeout', '--socket_timeout',
                       dest='socket_timeout', type='int', default=10,
                       help='Socket timeout(sec) during data transfers')
@@ -271,14 +390,19 @@ def main():
     group.add_option('-f', '--freq',
                       dest='frequency',
                       type='string', default=1000,
-                      help='Frequency to tune to, in kHz (can be a comma-separated list)',
+                      help='Frequency to tune to, in kHz (can be a comma-separated list). '
+                        'For sideband modes (lsb/lsn/usb/usn/cw/cwn) this is the carrier frequency. See --pbc option below.',
                       action='callback',
                       callback_args=(float,),
                       callback=get_comma_separated_args)
+    group.add_option('--pbc', '--freq-pbc',
+                      dest='freq_pbc',
+                      action='store_true', default=False,
+                      help='For sideband modes (lsb/lsn/usb/usn/cw/cwn) interpret -f/--freq frequency as the passband center frequency.')
     group.add_option('-m', '--modulation',
                       dest='modulation',
                       type='string', default='am',
-                      help='Modulation; one of am, lsb, usb, cw, nbfm, iq (default passband if -L/-H not specified)')
+                      help='Modulation; one of am/amn/amw, sam/sau/sal/sas/qam, lsb/lsn, usb/usn, cw/cwn, nbfm/nnfm, iq (default passband if -L/-H not specified)')
     group.add_option('--ncomp', '--no_compression',
                       dest='compression',
                       default=True,
@@ -316,6 +440,18 @@ def main():
                       dest='nb',
                       action='store_true', default=False,
                       help='Enable noise blanker with default parameters.')
+    group.add_option('--de-emp',
+                      dest='de_emp',
+                      action='store_true', default=False,
+                      help='Enable de-emphasis.')
+    group.add_option('--raw',
+                      dest='raw',
+                      action='store_true', default=False,
+                      help='Raw samples processing')
+    group.add_option('--if',
+                      dest='ifreq',
+                      type='float', default=None,
+                      help='Intermediate frequency, Hz. Default: no IF')
     group.add_option('--nb-gate',
                       dest='nb_gate',
                       type='int', default=100,
@@ -344,12 +480,12 @@ def main():
     group = OptionGroup(parser, "Rig control options", "")
     group.add_option('--rigctl', '--enable-rigctl',
                       dest='rigctl_enabled',
-                      default=True,
+                      default=False,
                       action='store_true',
                       help='Enable rigctld backend for frequency changes.')
     group.add_option('--rigctl-port', '--rigctl-port',
                       dest='rigctl_port',
-                      type='string', default='6400',
+                      type='string', default=[6400],
                       help='Port listening for rigctl commands (default 6400, can be comma separated list',
                       action='callback',
                       callback_args=(int,),
@@ -371,30 +507,28 @@ def main():
 
     if options.list_sound_devices:
         print(sc.all_speakers())
-        sys.exit();
+        sys.exit()
 
     FORMAT = '%(asctime)-15s pid %(process)5d %(message)s'
     logging.basicConfig(level=logging.getLevelName(options.log_level.upper()), format=FORMAT)
-    if options.log_level.upper() == 'DEBUG':
-        gc.set_debug(gc.DEBUG_SAVEALL | gc.DEBUG_LEAK | gc.DEBUG_UNCOLLECTABLE)
 
     run_event = threading.Event()
     run_event.set()
 
-    if options.tlimit is not None and options.dt != 0:
-        print('Warning: --tlimit ignored when --dt-sec option used')
-
     options.sdt = 0
     options.dir = None
-    options.raw = False
     options.sound = True
     options.no_api = False
+    options.nolocal = False
     options.tstamp = False
     options.station = None
     options.filename = None
     options.test_mode = False
     options.is_kiwi_wav = False
     options.is_kiwi_tdoa = False
+    options.wf_cal = None
+    options.wideband = False
+
     gopt = options
     multiple_connections,options = options_cross_product(options)
 
@@ -409,7 +543,7 @@ def main():
             if opt.launch_delay != 0 and i != 0 and options[i-1].server_host == options[i].server_host:
                 time.sleep(opt.launch_delay)
             r.start()
-            #logging.info("started kiwi client %d, timestamp=%d" % (i, options[i].timestamp))
+            #logging.info("started kiwi client %d, timestamp=%d" % (i, options[i].ws_timestamp))
             logging.info("started kiwi client %d" % i)
 
         while run_event.is_set():
@@ -424,8 +558,6 @@ def main():
         run_event.clear()
         join_threads(snd_recorders)
         print("Exception: threads successfully closed")
-
-    logging.debug('gc %s' % gc.garbage)
 
 if __name__ == '__main__':
     #import faulthandler
